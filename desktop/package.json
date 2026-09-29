@@ -1,0 +1,37 @@
+{
+  "name": "snake-3d-desktop",
+  "version": "1.0.0",
+  "productName": "Snake3D",
+  "description": "3D 贪吃蛇桌面版",
+  "author": "WorkBuddy",
+  "main": "main.js",
+  "scripts": {
+    "sync": "node scripts/sync-web.mjs",
+    "start": "electron .",
+    "dist": "npm run sync && electron-builder --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.workbuddy.snake3d",
+    "productName": "Snake3D",
+    "asar": true,
+    "files": [
+      "main.js",
+      "index.html",
+      "three.module.js",
+      "icon.png"
+    ],
+    "win": {
+      "icon": "icon.png",
+      "target": [
+        { "target": "portable", "arch": ["x64"] }
+      ]
+    },
+    "portable": {
+      "artifactName": "Snake3D-Portable.exe"
+    }
+  }
+}
