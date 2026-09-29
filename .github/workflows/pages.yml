@@ -31,7 +31,10 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: 配置 Pages（首次运行自动开启）
+      # 注意：仓库首次使用时，需要先在 Settings → Pages → Source
+      # 手动选择 "GitHub Actions"。GITHUB_TOKEN 无权首次创建 Pages 站点
+      # （会报 "Resource not accessible by integration"），开通后本步自动通过。
+      - name: 配置 Pages
         uses: actions/configure-pages@v5
         with:
           enablement: true
