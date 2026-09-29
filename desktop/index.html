@@ -152,6 +152,7 @@
       <div class="stat"><span class="k">最高分</span><span class="v gold" id="ui-best">0</span></div>
       <div class="stat"><span class="k">长度</span><span class="v green" id="ui-len">4</span></div>
       <div class="stat"><span class="k">速度</span><span class="v" id="ui-lv">1</span></div>
+      <div class="stat"><span class="k">视角</span><span class="v" id="ui-view">上帝</span></div>
     </div>
     <div id="tools">
       <button class="btn-icon" id="btn-view" title="切换视角 (C)">
@@ -177,10 +178,10 @@
         <div class="key"><b>W</b><b>A</b><b>S</b><b>D</b> 移动</div>
         <div class="key"><b>↑↓←→</b> 移动</div>
         <div class="key"><b>空格</b> 暂停</div>
-        <div class="key"><b>C</b> 切换视角</div>
+        <div class="key"><b>C</b> 跟随 / 上帝视角</div>
         <div class="key"><b>R</b> 重开</div>
       </div>
-      <div class="tip">移动端可滑动屏幕或使用右下角方向键</div>
+      <div class="tip">移动端可滑动屏幕或使用右下角方向键<br/>跟随视角：W 前进、A/D 左右转向；上帝视角：方向键即屏幕方向</div>
     </div>
   </div>
 
@@ -271,7 +272,7 @@ let score = 0;
 let speedLevel = 1;
 let best = Number(localStorage.getItem('snake3d_best') || 0);
 let soundOn = localStorage.getItem('snake3d_sound') !== '0';
-let camMode = 2;              // 0 跟随 1 立体俯瞰 2 上帝视角（默认）
+let camMode = 1;              // 0 跟随视角 1 上帝视角（默认）
 let deathShake = 0;
 
 /* ============================================================
@@ -670,8 +671,28 @@ function placeFood() {
 
 function isOpposite(a, b) { return a.x === -b.x && a.z === -b.z; }
 
+/**
+ * 屏幕方向（up/down/left/right）→ 世界方向。
+ * 两种视角都以「屏幕上看到的方位」为准：
+ *  - 上帝视角：屏幕上方 = 世界 -z（与画面一致）
+ *  - 跟随视角：屏幕上方 = 蛇当前前进方向，即 W 继续前进、A/D 左右转向
+ *    （用蛇的朝向而非相机偏航角做基准，避免相机转向滞后造成误判）
+ */
+function dirFromScreen(name) {
+  const sx = name === 'left' ? -1 : name === 'right' ? 1 : 0;
+  const sy = name === 'up' ? -1 : name === 'down' ? 1 : 0;
+  // 转向基准用「已排队的方向」：快速连按两次 A 可以连续左转两次
+  const ref = pendingDir || dir;
+  const y = camMode === 0 ? Math.atan2(ref.x, ref.z) : Math.PI;
+  const cy = Math.cos(y), sn = Math.sin(y);
+  const wx = -sx * cy - sy * sn;
+  const wz = sx * sn - sy * cy;
+  if (Math.abs(wx) >= Math.abs(wz)) return wx >= 0 ? DIRS.right : DIRS.left;
+  return wz >= 0 ? DIRS.down : DIRS.up;
+}
+
 function setDir(name) {
-  const d = DIRS[name];
+  const d = dirFromScreen(name);
   if (!d) return;
   if (state === 'ready') return;
   if (isOpposite(d, dir)) return;              // 不能 180° 掉头
@@ -815,9 +836,6 @@ function updateCamera(dt, t) {
       hp.z - Math.cos(camYaw) * dist
     );
     camTargetLook.set(hp.x + Math.sin(camYaw) * 1.8, 0.55, hp.z + Math.cos(camYaw) * 1.8);
-  } else if (camMode === 1) {
-    camTargetPos.set(15.5, 18.5, 15.5);
-    camTargetLook.set(0, 0.4, 0);
   } else {
     // 上帝视角：跟随蛇头的正俯视，相机位置钳制保证棋盘尽量完整留在画面内
     const h = topDownHeight();
@@ -848,9 +866,6 @@ function snapCamera() {
     camYaw = dirYaw();
     camera.position.set(hp.x - Math.sin(camYaw) * 8.6, 6.6, hp.z - Math.cos(camYaw) * 8.6);
     lookSmooth.set(hp.x + Math.sin(camYaw) * 1.8, 0.55, hp.z + Math.cos(camYaw) * 1.8);
-  } else if (camMode === 1) {
-    camera.position.set(15.5, 18.5, 15.5);
-    lookSmooth.set(0, 0.4, 0);
   } else {
     const h = topDownHeight();
     const c = topDownCamTarget(hp, h);
@@ -952,7 +967,7 @@ window.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key === 'c' || e.key === 'C') {
-    camMode = (camMode + 1) % 3;
+    camMode = (camMode + 1) % 2;
     toastCamera();
     return;
   }
@@ -964,7 +979,22 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-const viewNames = ['跟随视角', '立体俯瞰', '上帝视角'];
+const viewNames = ['跟随视角', '上帝视角'];
+// 切视角时顺带提示当前视角下的操作方式，避免"按键没反应"的困惑
+const viewTips = ['W 前进 · A 左转 · D 右转', '方向键 = 屏幕上看到的方位'];
+const hintTexts = [
+  'W 前进 · A 左转 · D 右转 · 空格暂停 · C 切到上帝视角',
+  '方向键 / WASD = 屏幕方向 · 空格暂停 · C 切到跟随视角'
+];
+
+const viewShorts = ['跟随', '上帝'];
+
+function updateHint() {
+  const el = $('hint');
+  if (el) el.textContent = hintTexts[camMode];
+  const v = $('ui-view');
+  if (v) v.textContent = viewShorts[camMode];
+}
 let toastTimer = null;
 function toastCamera() {
   let el = $('cam-toast');
@@ -972,15 +1002,17 @@ function toastCamera() {
     el = document.createElement('div');
     el.id = 'cam-toast';
     el.style.cssText = 'position:absolute;left:50%;top:78px;transform:translateX(-50%);z-index:12;' +
-      'padding:8px 18px;border-radius:11px;font-size:12.5px;font-weight:700;letter-spacing:.1em;' +
+      'padding:8px 18px;border-radius:11px;font-size:12.5px;font-weight:700;letter-spacing:.06em;' +
+      'white-space:nowrap;max-width:92vw;overflow:hidden;text-overflow:ellipsis;' +
       'background:rgba(12,22,38,.82);border:1px solid rgba(67,232,255,.3);color:#8ff2ff;' +
       'backdrop-filter:blur(12px);pointer-events:none;transition:opacity .3s ease';
     document.getElementById('app').appendChild(el);
   }
-  el.textContent = viewNames[camMode];
+  el.textContent = viewNames[camMode] + ' · ' + viewTips[camMode];
   el.style.opacity = '1';
+  updateHint();
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 1100);
+  toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 1900);
 }
 
 // 触摸滑动
@@ -1057,7 +1089,7 @@ $('btn-pause').addEventListener('click', () => {
   if (state === 'playing') pauseGame();
   else if (state === 'paused') resumeGame();
 });
-$('btn-view').addEventListener('click', () => { camMode = (camMode + 1) % 3; toastCamera(); });
+$('btn-view').addEventListener('click', () => { camMode = (camMode + 1) % 2; toastCamera(); });
 $('btn-sound').addEventListener('click', toggleSound);
 $('btn-sound').classList.toggle('off', !soundOn);
 
@@ -1078,6 +1110,15 @@ window.addEventListener('resize', () => {
 resetGame();
 state = 'ready';
 updateHUD();
+updateHint();
+
+// 自动化测试/调试钩子
+window.__snake3d = {
+  get state() { return state; },
+  get camMode() { return camMode; },
+  get score() { return score; },
+  get len() { return snake.length; }
+};
 // 待机时让镜头先就位
 camera.position.set(0, 15.5, 20);
 lookSmooth.set(0, 0.4, 0);
