@@ -410,57 +410,397 @@ function cellZ(gz) { return (gz + 0.5 - HALF) * CELL; }
 const snakeGroup = new THREE.Group();
 scene.add(snakeGroup);
 
-const BODY_COLORS = [0x43e8ff, 0x3fd6f5, 0x4fd0e0, 0x6fe8a8, 0x9df06b];
+/* 造型参数 ---------------------------------------------------- */
+const BODY_SEGS   = 16;                  // 横截面分段数
+const MAX_RINGS   = 640;                 // 身体环数上限
+const SAMPLE_STEP = 0.30;                // 期望环间距（世界单位）
+const CORNER_R    = 0.36;                // 拐角圆角半径
+const CORNER_SEG  = 8;                   // 拐角采样段数
+const NECK_R      = 0.285;               // 颈部半径
+const MAX_R       = 0.385;               // 最粗处半径
+const MID_R       = 0.295;               // 中后段半径
+const TIP_R       = 0.012;               // 尾尖半径
+const FLAT        = 0.84;                // 垂直压扁系数（蛇身横截面是扁圆的）
+const HEAD_LEAD   = 0.30;                // 头部相对头格中心的前伸量
+const HEAD_Y      = 0.015 + NECK_R * FLAT + 0.045;
 
-function segMaterial(i, total) {
-  const t = total <= 1 ? 0 : i / (total - 1);
-  const c1 = new THREE.Color(0x2fe6ff);
-  const c2 = new THREE.Color(0x8cf05f);
-  const col = c1.clone().lerp(c2, t * 0.85);
-  return new THREE.MeshStandardMaterial({
-    color: col,
-    roughness: 0.3,
-    metalness: 0.42,
-    emissive: col.clone().multiplyScalar(0.34),
-    emissiveIntensity: 1.05
-  });
-}
+const COL_HEAD  = new THREE.Color(0x2fe6ff);   // 头端基色
+const COL_TAIL  = new THREE.Color(0x8cf05f);   // 尾端基色
+const COL_BELLY = new THREE.Color(0xdcffe6);   // 腹部提亮色
+const CR = [COL_HEAD.r, COL_HEAD.g, COL_HEAD.b];
+const TR = [COL_TAIL.r, COL_TAIL.g, COL_TAIL.b];
+const BR = [COL_BELLY.r, COL_BELLY.g, COL_BELLY.b];
 
-function createSegment(material, scale = 1) {
-  const geo = new THREE.BoxGeometry(0.84 * scale, 0.84 * scale, 0.84 * scale);
-  const mesh = new THREE.Mesh(geo, material);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  return mesh;
-}
+/* 身体管：预分配缓冲，逐帧原地更新（避免每帧新建几何体造成 GC 抖动） */
+const VMAX = MAX_RINGS * BODY_SEGS;
+const tubePos = new Float32Array(VMAX * 3);
+const tubeNrm = new Float32Array(VMAX * 3);
+const tubeCol = new Float32Array(VMAX * 3);
+const tubeIdx = new Uint32Array((MAX_RINGS - 1) * BODY_SEGS * 6);
 
+(function buildTubeIndex() {
+  let k = 0;
+  for (let r = 0; r < MAX_RINGS - 1; r++) {
+    for (let s = 0; s < BODY_SEGS; s++) {
+      const s2 = (s + 1) % BODY_SEGS;
+      const a = r * BODY_SEGS + s,  b = r * BODY_SEGS + s2;
+      const c = (r + 1) * BODY_SEGS + s2, d = (r + 1) * BODY_SEGS + s;
+      tubeIdx[k++] = a; tubeIdx[k++] = b; tubeIdx[k++] = c;
+      tubeIdx[k++] = a; tubeIdx[k++] = c; tubeIdx[k++] = d;
+    }
+  }
+})();
+
+const tubeGeo = new THREE.BufferGeometry();
+tubeGeo.setAttribute('position', new THREE.BufferAttribute(tubePos, 3).setUsage(THREE.DynamicDrawUsage));
+tubeGeo.setAttribute('normal', new THREE.BufferAttribute(tubeNrm, 3).setUsage(THREE.DynamicDrawUsage));
+tubeGeo.setAttribute('color', new THREE.BufferAttribute(tubeCol, 3).setUsage(THREE.DynamicDrawUsage));
+tubeGeo.setIndex(new THREE.BufferAttribute(tubeIdx, 1));
+tubeGeo.setDrawRange(0, 0);
+
+const bodyMesh = new THREE.Mesh(tubeGeo, new THREE.MeshStandardMaterial({
+  vertexColors: true,
+  roughness: 0.24,
+  metalness: 0.36,
+  emissive: 0x115a72,
+  emissiveIntensity: 0.9
+}));
+bodyMesh.castShadow = true;
+bodyMesh.receiveShadow = true;
+bodyMesh.frustumCulled = false;   // 顶点逐帧重写，包围球不可靠
+snakeGroup.add(bodyMesh);
+
+/* 蛇头：颅骨 + 吻部 + 下颌 + 琥珀色竖瞳 + 分叉信子 --------------- */
 function createHead() {
   const g = new THREE.Group();
-  const geo = new THREE.BoxGeometry(0.94, 0.94, 0.94);
-  const mat = new THREE.MeshStandardMaterial({
-    color: 0x7cf6ff, roughness: 0.22, metalness: 0.5,
-    emissive: 0x2fd8ff, emissiveIntensity: 1.35
-  });
-  const core = new THREE.Mesh(geo, mat);
-  core.castShadow = true;
-  g.add(core);
 
-  // 眼睛
-  const eyeWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.5, roughness: 0.2 });
-  const eyePupil = new THREE.MeshStandardMaterial({ color: 0x08131c, emissive: 0x08131c, emissiveIntensity: 0.2 });
-  [[-0.24, 0.1], [0.24, 0.1]].forEach(([x]) => {
-    const w = new THREE.Mesh(new THREE.SphereGeometry(0.145, 14, 14), eyeWhite);
-    w.position.set(x, 0.16, 0.42);
-    g.add(w);
-    const p = new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 12), eyePupil);
-    p.position.set(x, 0.16, 0.53);
-    g.add(p);
+  const skin = new THREE.MeshStandardMaterial({
+    color: 0x49e0d0, roughness: 0.46, metalness: 0.15,
+    emissive: 0x1fb8c8, emissiveIntensity: 0.45
   });
+  const skinBack = new THREE.MeshStandardMaterial({
+    color: 0x2fb3c4, roughness: 0.5, metalness: 0.15,
+    emissive: 0x15809c, emissiveIntensity: 0.6
+  });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x08131c, roughness: 0.42, metalness: 0.2 });
+  const amber = new THREE.MeshStandardMaterial({
+    color: 0xffc247, roughness: 0.14, metalness: 0.12,
+    emissive: 0xd9860f, emissiveIntensity: 1.7
+  });
+
+  // 颅骨
+  const skull = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 18), skin);
+  skull.scale.set(0.335, 0.25, 0.40);
+  skull.position.z = 0.02;
+  g.add(skull);
+
+  // 下颌 / 颊部
+  const jaw = new THREE.Mesh(new THREE.SphereGeometry(1, 22, 16), skinBack);
+  jaw.scale.set(0.315, 0.175, 0.33);
+  jaw.position.set(0, -0.085, 0.10);
+  g.add(jaw);
+
+  // 吻部（前窄后宽，垂直压扁）
+  const snoutGeo = new THREE.CylinderGeometry(0.135, 0.30, 0.40, 22, 1);
+  snoutGeo.rotateX(Math.PI / 2);
+  snoutGeo.scale(1, 0.76, 1);
+  const snout = new THREE.Mesh(snoutGeo, skin);
+  snout.position.set(0, -0.01, 0.30);
+  g.add(snout);
+
+  // 两侧对称部件
+  [-1, 1].forEach(sx => {
+    // 眼窝
+    const socket = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), skin);
+    socket.scale.set(0.105, 0.105, 0.12);
+    socket.position.set(sx * 0.20, 0.085, 0.16);
+    g.add(socket);
+
+    // 眼球
+    const ball = new THREE.Mesh(new THREE.SphereGeometry(0.088, 16, 14), amber);
+    ball.position.set(sx * 0.225, 0.09, 0.17);
+    g.add(ball);
+
+    // 竖瞳
+    const pupil = new THREE.Mesh(new THREE.BoxGeometry(0.022, 0.098, 0.03), dark);
+    pupil.position.set(sx * 0.305, 0.09, 0.17);
+    g.add(pupil);
+
+    // 眉脊（蛇特有的凶相）
+    const brow = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), skinBack);
+    brow.scale.set(0.10, 0.045, 0.115);
+    brow.position.set(sx * 0.175, 0.175, 0.15);
+    g.add(brow);
+
+    // 嘴角线
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.012, 0.016, 0.34), dark);
+    mouth.position.set(sx * 0.125, -0.045, 0.30);
+    g.add(mouth);
+
+    // 鼻孔
+    const nostril = new THREE.Mesh(new THREE.SphereGeometry(0.021, 10, 8), dark);
+    nostril.position.set(sx * 0.058, 0.045, 0.478);
+    g.add(nostril);
+  });
+
+  // 分叉信子（可伸缩）
+  const tongueMat = new THREE.MeshStandardMaterial({
+    color: 0xff3d68, roughness: 0.35, metalness: 0.1,
+    emissive: 0xff2d55, emissiveIntensity: 1.5
+  });
+  const tongue = new THREE.Group();
+  const shaftGeo = new THREE.CylinderGeometry(0.019, 0.024, 0.26, 8);
+  shaftGeo.rotateX(Math.PI / 2);
+  const shaft = new THREE.Mesh(shaftGeo, tongueMat);
+  shaft.position.z = 0.13;
+  tongue.add(shaft);
+  [-1, 1].forEach(sx => {
+    const prongGeo = new THREE.CylinderGeometry(0.012, 0.017, 0.17, 7);
+    prongGeo.rotateX(Math.PI / 2);
+    const prong = new THREE.Mesh(prongGeo, tongueMat);
+    prong.position.set(sx * 0.05, 0, 0.33);
+    prong.rotation.y = sx * 0.40;
+    tongue.add(prong);
+  });
+  tongue.position.set(0, -0.055, 0.46);
+  tongue.scale.z = 0.02;
+  tongue.visible = false;
+  g.add(tongue);
+  g.userData.tongue = tongue;
+
+  g.scale.setScalar(1.18);   // 头部略宽于颈部，轮廓更像蛇
   return g;
 }
 
-let headMesh = null;
-const bodyMeshes = [];   // 与 snake[1..] 一一对应
+const headMesh = createHead();
+snakeGroup.add(headMesh);
+
+/* ---------- 身体几何：折线 → 圆角 → 等弧长重采样 → 管体 ---------- */
+const _rX = [], _rZ = [];      // 原始折线（头 → 尾）
+const _sX = [], _sZ = [];      // 拐角圆角后
+const _cum = [];               // 累积弧长
+const _bX = [], _bZ = [];      // 重采样后的中心线
+const _tX = [], _tZ = [];      // 中心线切向（摆动前）
+const bulges = [];             // 吞咽凸起：{ s } 沿弧长向尾部移动
+
+function sstep(x) { const t = x < 0 ? 0 : x > 1 ? 1 : x; return t * t * (3 - 2 * t); }
+
+// 沿体长的半径分布：颈 → 最粗 → 中后段 → 尖尾
+function radiusAt(u) {
+  if (u < 0.20) return NECK_R + (MAX_R - NECK_R) * sstep(u / 0.20);
+  if (u < 0.66) return MAX_R + (MID_R - MAX_R) * ((u - 0.20) / 0.46);
+  return MID_R + (TIP_R - MID_R) * Math.pow((u - 0.66) / 0.34, 1.5);
+}
+
+// 每个拐点用二次贝塞尔切角（直角转弯处得到圆润的弧，直段保持笔直）
+function smoothCorners() {
+  _sX.length = 0; _sZ.length = 0;
+  const n = _rX.length;
+  if (n < 3) {
+    for (let i = 0; i < n; i++) { _sX.push(_rX[i]); _sZ.push(_rZ[i]); }
+    return;
+  }
+  _sX.push(_rX[0]); _sZ.push(_rZ[0]);
+  for (let i = 1; i < n - 1; i++) {
+    const vx = _rX[i], vz = _rZ[i];
+    let ax = _rX[i - 1] - vx, az = _rZ[i - 1] - vz;
+    let bx = _rX[i + 1] - vx, bz = _rZ[i + 1] - vz;
+    const la = Math.hypot(ax, az), lb = Math.hypot(bx, bz);
+    if (la < 1e-6 || lb < 1e-6) { _sX.push(vx); _sZ.push(vz); continue; }
+    ax /= la; az /= la; bx /= lb; bz /= lb;
+    if (Math.abs(ax * bz - az * bx) < 1e-4) { _sX.push(vx); _sZ.push(vz); continue; }
+    const r = Math.min(CORNER_R, la * 0.45, lb * 0.45);
+    const p1x = vx + ax * r, p1z = vz + az * r;
+    const p2x = vx + bx * r, p2z = vz + bz * r;
+    for (let k = 0; k < CORNER_SEG; k++) {
+      const t = k / (CORNER_SEG - 1), m = 1 - t;
+      _sX.push(m * m * p1x + 2 * m * t * vx + t * t * p2x);
+      _sZ.push(m * m * p1z + 2 * m * t * vz + t * t * p2z);
+    }
+  }
+  _sX.push(_rX[n - 1]); _sZ.push(_rZ[n - 1]);
+}
+
+let ringCount = 0;
+
+function buildSnakeBody(t, dt) {
+  if (snake.length < 2) { tubeGeo.setDrawRange(0, 0); headMesh.visible = false; return; }
+  headMesh.visible = true;
+
+  // 1) 原始折线：蛇头用帧间插值位置，其余为各节格子中心
+  _rX.length = 0; _rZ.length = 0;
+  for (let i = 0; i < snake.length; i++) {
+    const s = snake[i];
+    _rX.push(cellX(s.pgx) + (cellX(s.gx) - cellX(s.pgx)) * t);
+    _rZ.push(cellZ(s.pgz) + (cellZ(s.gz) - cellZ(s.pgz)) * t);
+  }
+
+  // 2) 拐角圆角
+  smoothCorners();
+
+  // 3) 累积弧长
+  const ns = _sX.length;
+  _cum.length = 0;
+  let total = 0;
+  _cum.push(0);
+  for (let i = 1; i < ns; i++) {
+    total += Math.hypot(_sX[i] - _sX[i - 1], _sZ[i] - _sZ[i - 1]);
+    _cum.push(total);
+  }
+  if (total < 0.08 || ns < 2) { tubeGeo.setDrawRange(0, 0); return; }
+
+  // 4) 等弧长重采样
+  let step = total / 160;
+  if (step < 0.10) step = 0.10; else if (step > SAMPLE_STEP) step = SAMPLE_STEP;
+  let rings = Math.ceil(total / step) + 1;
+  if (rings > MAX_RINGS) { rings = MAX_RINGS; step = total / (rings - 1); }
+  if (rings < 4) rings = 4;
+  ringCount = rings;
+
+  _bX.length = 0; _bZ.length = 0;
+  let seg = 0;
+  for (let i = 0; i < rings; i++) {
+    const target = Math.min(i * step, total);
+    while (seg < ns - 2 && _cum[seg + 1] < target) seg++;
+    const segLen = _cum[seg + 1] - _cum[seg];
+    const f = segLen > 1e-9 ? (target - _cum[seg]) / segLen : 0;
+    const x0 = _sX[seg], z0 = _sZ[seg];
+    const x1 = _sX[seg + 1], z1 = _sZ[seg + 1];
+    _bX.push(x0 + (x1 - x0) * f);
+    _bZ.push(z0 + (z1 - z0) * f);
+  }
+
+  const tm = performance.now() / 1000;
+
+  // 5) 基础切向
+  _tX.length = 0; _tZ.length = 0;
+  for (let i = 0; i < rings; i++) {
+    const i0 = i > 0 ? i - 1 : 0, i1 = i < rings - 1 ? i + 1 : rings - 1;
+    let tx = _bX[i1] - _bX[i0], tz = _bZ[i1] - _bZ[i0];
+    const l = Math.hypot(tx, tz) || 1;
+    _tX.push(tx / l); _tZ.push(tz / l);
+  }
+
+  // 6) 侧向行进波：头部振幅为 0，向尾部增强；波峰朝尾端传播（真蛇的侧向蠕动）
+  const waveK = (Math.PI * 2) / 2.35;
+  const vWave = (CELL / Math.max(stepInterval, 0.02)) * 0.80;
+  for (let i = 0; i < rings; i++) {
+    const u = i / (rings - 1);
+    const env = Math.min(1, u / 0.30) * (u > 0.90 ? 1 - ((u - 0.90) / 0.10) * 0.45 : 1);
+    if (env <= 0) continue;
+    const ph = (i * step - vWave * tm) * waveK;
+    const off = 0.105 * env * (Math.sin(ph) + 0.34 * Math.sin(ph * 2 + 1.3));
+    _bX[i] += _tZ[i] * off;
+    _bZ[i] -= _tX[i] * off;
+  }
+
+  // 7) 吞咽凸起向尾部推进
+  if (dt) {
+    for (let i = bulges.length - 1; i >= 0; i--) {
+      bulges[i].s += 2.7 * dt;
+      if (bulges[i].s > total + 0.6) bulges.splice(i, 1);
+    }
+  }
+
+  // 8) 逐环写入顶点：扁圆横截面 + 锥度 + 背纹 + 亮腹
+  const wob = Math.sin(tm * 2.4) * 0.018;
+  for (let i = 0; i < rings; i++) {
+    const u = i / (rings - 1);
+    const i0 = i > 0 ? i - 1 : 0, i1 = i < rings - 1 ? i + 1 : rings - 1;
+    let tx = _bX[i1] - _bX[i0], tz = _bZ[i1] - _bZ[i0];
+    const tl = Math.hypot(tx, tz) || 1;
+    tx /= tl; tz /= tl;
+    const sx = tz, sz = -tx;                       // 水平面内垂直于切向
+
+    let r = radiusAt(u);
+    for (let k = 0; k < bulges.length; k++) {
+      const d = (i * step - bulges[k].s) / 0.55;
+      r *= 1 + 0.28 * Math.exp(-d * d);
+    }
+    const ry = r * FLAT;
+    const px = _bX[i], pz = _bZ[i];
+    const py = 0.015 + ry + wob * Math.min(1, u / 0.25);   // 腹部贴地
+
+    // 背部横纹（鳞纹）按弧长分布：波长≈1.4 格，与身体长度无关
+    const band = Math.pow(Math.abs(Math.sin(i * step * 4.6 + 0.7)), 5);
+    const base = u * 0.92;
+    const bR = CR[0] + (TR[0] - CR[0]) * base;
+    const bG = CR[1] + (TR[1] - CR[1]) * base;
+    const bB = CR[2] + (TR[2] - CR[2]) * base;
+
+    for (let a = 0; a < BODY_SEGS; a++) {
+      const ang = (a / BODY_SEGS) * Math.PI * 2;
+      const ca = Math.cos(ang), sa = Math.sin(ang);
+      const vi = (i * BODY_SEGS + a) * 3;
+
+      tubePos[vi]     = px + sx * ca * r;
+      tubePos[vi + 1] = py + sa * ry;
+      tubePos[vi + 2] = pz + sz * ca * r;
+
+      // 椭圆外法线（解析给出，省掉 computeVertexNormals）
+      let nx = sx * (ca / r), ny = sa / ry, nz = sz * (ca / r);
+      const nl = Math.hypot(nx, ny, nz) || 1;
+      tubeNrm[vi] = nx / nl; tubeNrm[vi + 1] = ny / nl; tubeNrm[vi + 2] = nz / nl;
+
+      const belly = sa < 0 ? -sa : 0;
+      const bellyK = belly * belly * 0.62;
+      const dark = 1 - 0.42 * band * (0.4 + 0.6 * (1 - belly));
+
+      let cr = bR * dark, cg = bG * dark, cb = bB * dark;
+      cr += (BR[0] - cr) * bellyK;
+      cg += (BR[1] - cg) * bellyK;
+      cb += (BR[2] - cb) * bellyK;
+      tubeCol[vi] = cr; tubeCol[vi + 1] = cg; tubeCol[vi + 2] = cb;
+    }
+  }
+
+  tubeGeo.attributes.position.needsUpdate = true;
+  tubeGeo.attributes.normal.needsUpdate = true;
+  tubeGeo.attributes.color.needsUpdate = true;
+  tubeGeo.setDrawRange(0, (rings - 1) * BODY_SEGS * 6);
+
+  // 9) 头部：沿中心线前伸，转向时带一点侧倾
+  headMesh.position.set(
+    _bX[0] + _tX[0] * HEAD_LEAD,
+    HEAD_Y + wob,
+    _bZ[0] + _tZ[0] * HEAD_LEAD
+  );
+  const yawTarget = dirYaw();
+  headMesh.rotation.y = angleLerp(headMesh.rotation.y, yawTarget, 0.42);
+  let dy = headMesh.rotation.y - yawTarget;
+  dy = ((dy + Math.PI) % (Math.PI * 2)) - Math.PI;
+  headMesh.rotation.z = THREE.MathUtils.clamp(dy * 0.85, -0.32, 0.32);
+}
+
+/* ---------- 吐信：平时收回，定时快速弹出；靠近食物时更频繁 ---------- */
+const FLICK_DUR = 0.42;
+let tongueTimer = 1.4, tongueLife = 0;
+
+function updateTongue(dt) {
+  const tongue = headMesh.userData.tongue;
+  if (!tongue) return;
+  if (tongueLife > 0) {
+    tongueLife -= dt;
+    if (tongueLife < 0) tongueLife = 0;
+  } else {
+    tongueTimer -= dt;
+    if (tongueTimer <= 0) {
+      tongueLife = FLICK_DUR;
+      const h = snake[0];
+      const near = h && (Math.abs(h.gx - food.gx) + Math.abs(h.gz - food.gz) <= 3);
+      tongueTimer = state === 'playing' ? (near ? 0.75 : 2.0 + Math.random() * 1.5) : 1.8;
+    }
+  }
+  let k = 0;
+  if (tongueLife > 0) {
+    const p = 1 - tongueLife / FLICK_DUR;
+    if (p < 0.22) k = p / 0.22;
+    else if (p < 0.62) k = 1;
+    else k = Math.max(0, 1 - (p - 0.62) / 0.38);
+  }
+  tongue.scale.z = 0.02 + k * 0.98;
+  tongue.visible = k > 0.03;
+}
 
 /* ============================================================
    食物
@@ -594,11 +934,6 @@ function beep(freq, dur, type, gain) {
    游戏逻辑
    ============================================================ */
 function resetGame() {
-  // 清理蛇
-  snakeGroup.clear();
-  bodyMeshes.length = 0;
-  headMesh = null;
-
   snake = [];
   dir = DIRS.right;
   pendingDir = null;
@@ -607,26 +942,22 @@ function resetGame() {
   score = 0;
   speedLevel = 1;
   deathShake = 0;
+  bulges.length = 0;
 
   // 初始 4 节，头在 gx=8，朝右
   const gz = Math.floor(GRID / 2);
   const headG = { gx: 8, gz };
-  snake.push({ gx: headG.gx, gz: headG.gz, pgx: headG.gx, pgz: headG.gz, mesh: null });
+  snake.push({ gx: headG.gx, gz: headG.gz, pgx: headG.gx, pgz: headG.gz });
   for (let i = 1; i < 4; i++) {
-    snake.push({ gx: headG.gx - i, gz, pgx: headG.gx - i, pgz: gz, mesh: null });
+    snake.push({ gx: headG.gx - i, gz, pgx: headG.gx - i, pgz: gz });
   }
 
-  headMesh = createHead();
-  headMesh.position.set(cellX(snake[0].gx), 0.5, cellZ(snake[0].gz));
-  snakeGroup.add(headMesh);
-
-  for (let i = 1; i < snake.length; i++) {
-    const m = createSegment(segMaterial(i, snake.length), 1);
-    m.position.set(cellX(snake[i].gx), 0.5, cellZ(snake[i].gz));
-    snake[i].mesh = m;
-    bodyMeshes.push(m);
-    snakeGroup.add(m);
-  }
+  headMesh.rotation.set(0, dirYaw(), 0);
+  headMesh.userData.tongue.visible = false;
+  headMesh.userData.tongue.scale.z = 0.02;
+  tongueLife = 0;
+  tongueTimer = 1.0;
+  buildSnakeBody(1, 0);
 
   placeFood();
   updateHUD();
@@ -634,23 +965,10 @@ function resetGame() {
 }
 
 function addSegment(gx, gz) {
-  const m = createSegment(segMaterial(snake.length, snake.length + 1), 0.86);
-  m.position.set(cellX(gx), 0.5, cellZ(gz));
-  m.scale.setScalar(0.01);
-  snakeGroup.add(m);
-  snake.push({ gx, gz, pgx: gx, pgz: gz, mesh: m, spawn: 0 });
-  bodyMeshes.push(m);
-  refreshBodyColors();
-}
-
-function refreshBodyColors() {
-  const total = snake.length;
-  for (let i = 1; i < total; i++) {
-    const s = snake[i];
-    if (!s.mesh) continue;
-    s.mesh.material.dispose();
-    s.mesh.material = segMaterial(i, total);
-  }
+  snake.push({ gx, gz, pgx: gx, pgz: gz });
+  // 吃到食物：在颈部生成一个凸起，沿身体向尾部推进（蛇的吞咽效果）
+  bulges.push({ s: 0.35 });
+  if (bulges.length > 4) bulges.shift();
 }
 
 function placeFood() {
@@ -878,26 +1196,9 @@ function snapCamera() {
 /* ============================================================
    渲染同步
    ============================================================ */
-function renderSnake(t) {
-  for (let i = 0; i < snake.length; i++) {
-    const s = snake[i];
-    const x = cellX(s.pgx) + (cellX(s.gx) - cellX(s.pgx)) * t;
-    const z = cellZ(s.pgz) + (cellZ(s.gz) - cellZ(s.pgz)) * t;
-    const bob = Math.sin(performance.now() / 190 + i * 0.55) * 0.035;
-    if (i === 0 && headMesh) {
-      headMesh.position.set(x, 0.5 + bob * 1.5, z);
-      headMesh.rotation.y = angleLerp(headMesh.rotation.y, dirYaw(), 0.35);
-    } else if (s.mesh) {
-      s.mesh.position.set(x, 0.5 + bob, z);
-      if (s.spawn !== undefined) {
-        s.spawn += 0.11;
-        const k = Math.min(1, s.spawn);
-        const e = 1 - Math.pow(1 - k, 3);
-        s.mesh.scale.setScalar(0.86 * (0.35 + 0.65 * e) + (1 - e) * 0.1);
-        if (k >= 1) delete s.spawn;
-      }
-    }
-  }
+function renderSnake(t, dt) {
+  buildSnakeBody(t, dt);
+  updateTongue(dt);
 }
 
 /* ============================================================
@@ -922,7 +1223,7 @@ function animate(now) {
 
   const t = state === 'playing' ? Math.min(acc / stepInterval, 1) : 1;
 
-  renderSnake(t);
+  renderSnake(t, dt);
   updateParticles(dt);
   updateCamera(dt, t);
 
@@ -1117,7 +1418,35 @@ window.__snake3d = {
   get state() { return state; },
   get camMode() { return camMode; },
   get score() { return score; },
-  get len() { return snake.length; }
+  get len() { return snake.length; },
+  get rings() { return ringCount; },          // 当前身体环数（渲染层调试用）
+  get cells() { return snake.map(s => s.gx + ',' + s.gz).join(' '); },
+  // 调试用：直接给蛇加长（沿蛇形路线延伸尾巴，不与自己重叠），便于观察长身体形态
+  grow(n = 10) {
+    const last = snake[snake.length - 1];
+    const prev = snake.length > 1 ? snake[snake.length - 2] : last;
+    let dx = Math.sign(last.gx - prev.gx) || -1;
+    let dz = Math.sign(last.gz - prev.gz) || 0;
+    let gx = last.gx, gz = last.gz;
+    const occ = new Set(snake.map(s => s.gx + ',' + s.gz));
+    for (let i = 0; i < n; i++) {
+      if (gx + dx >= 0 && gx + dx < GRID && gz + dz >= 0 && gz + dz < GRID &&
+          !occ.has((gx + dx) + ',' + (gz + dz))) {
+        gx += dx; gz += dz;
+      } else {
+        const tx = dz, tz = -dx;           // 侧向一格后反向，形成蛇形走位
+        const turn = (ox, oz) => gx + ox >= 0 && gx + ox < GRID && gz + oz >= 0 && gz + oz < GRID &&
+                                !occ.has((gx + ox) + ',' + (gz + oz));
+        if (turn(tx, tz)) { gx += tx; gz += tz; }
+        else if (turn(-tx, -tz)) { gx -= tx; gz -= tz; }
+        else break;
+        dx = -dx; dz = -dz;
+      }
+      occ.add(gx + ',' + gz);
+      snake.push({ gx, gz, pgx: gx, pgz: gz });
+    }
+    return snake.length;
+  }
 };
 // 待机时让镜头先就位
 camera.position.set(0, 15.5, 20);
