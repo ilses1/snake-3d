@@ -271,7 +271,7 @@ let score = 0;
 let speedLevel = 1;
 let best = Number(localStorage.getItem('snake3d_best') || 0);
 let soundOn = localStorage.getItem('snake3d_sound') !== '0';
-let camMode = 0;              // 0 跟随 1 立体俯瞰 2 正俯视
+let camMode = 2;              // 0 跟随 1 立体俯瞰 2 上帝视角（默认）
 let deathShake = 0;
 
 /* ============================================================
@@ -771,6 +771,25 @@ function headWorldPos(t) {
   return new THREE.Vector3(x, 0.5, z);
 }
 
+// 上帝视角的相机高度：让棋盘（含边距）纵向刚好装进视野，极窄屏时拉高（上限 44）以保证横向也能看全
+function topDownHeight() {
+  const need = (HALF + 2.2) / Math.tan((camera.fov * Math.PI / 180) / 2);
+  const aspect = camera.aspect || 1;
+  return Math.min(44, Math.max(25.5, need / Math.min(aspect, 1)));
+}
+
+// 上帝视角机位：跟随蛇头，但钳制在"棋盘不出画"的范围内
+function topDownCamTarget(hp, h) {
+  const halfV = h * Math.tan((camera.fov * Math.PI / 180) / 2);
+  const halfH = halfV * (camera.aspect || 1);
+  // 可移动量 = 视野半宽 - 棋盘半宽 - 光带余量；棋盘装得下时锁中心，装不下时跟随蛇头
+  const slack = (s) => Math.max(0, Math.min(s - HALF - 0.6, HALF * 0.35));
+  return {
+    x: THREE.MathUtils.clamp(hp.x, -slack(halfH), slack(halfH)),
+    z: THREE.MathUtils.clamp(hp.z, -slack(halfV), slack(halfV))
+  };
+}
+
 function updateCamera(dt, t) {
   const hp = headWorldPos(t);
 
@@ -800,8 +819,11 @@ function updateCamera(dt, t) {
     camTargetPos.set(15.5, 18.5, 15.5);
     camTargetLook.set(0, 0.4, 0);
   } else {
-    camTargetPos.set(hp.x, 25.5, hp.z + 0.001);
-    camTargetLook.set(hp.x, 0, hp.z);
+    // 上帝视角：跟随蛇头的正俯视，相机位置钳制保证棋盘尽量完整留在画面内
+    const h = topDownHeight();
+    const c = topDownCamTarget(hp, h);
+    camTargetPos.set(c.x, h, c.z + 0.001);
+    camTargetLook.set(c.x, 0, c.z);
   }
 
   const follow = camMode === 0 ? (1 - Math.pow(0.0008, dt)) : (1 - Math.pow(0.004, dt));
@@ -820,10 +842,21 @@ function updateCamera(dt, t) {
 }
 
 function snapCamera() {
-  camYaw = dirYaw();
+  // 按当前视角模式一次性就位（开局/重开时避免从上一局的机位飞过来）
   const hp = headWorldPos(1);
-  camera.position.set(hp.x - Math.sin(camYaw) * 8.6, 6.6, hp.z - Math.cos(camYaw) * 8.6);
-  lookSmooth.set(hp.x, 0.5, hp.z);
+  if (camMode === 0) {
+    camYaw = dirYaw();
+    camera.position.set(hp.x - Math.sin(camYaw) * 8.6, 6.6, hp.z - Math.cos(camYaw) * 8.6);
+    lookSmooth.set(hp.x + Math.sin(camYaw) * 1.8, 0.55, hp.z + Math.cos(camYaw) * 1.8);
+  } else if (camMode === 1) {
+    camera.position.set(15.5, 18.5, 15.5);
+    lookSmooth.set(0, 0.4, 0);
+  } else {
+    const h = topDownHeight();
+    const c = topDownCamTarget(hp, h);
+    camera.position.set(c.x, h, c.z + 0.001);
+    lookSmooth.set(c.x, 0, c.z);
+  }
   camera.lookAt(lookSmooth);
 }
 
