@@ -51,18 +51,51 @@ jobs:
         working-directory: desktop
         run: npm run sync
 
+      # electron-builder 生成 AppImage 时需要 FUSE 运行库
+      - name: 安装 Linux 打包依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libfuse2t64 \
+            || sudo apt-get install -y --no-install-recommends libfuse2 \
+            || true
+          sudo apt-get install -y --no-install-recommends fakeroot || true
+
       - name: 打包
         working-directory: desktop
-        run: npx electron-builder ${{ matrix.args }} --publish never
+        shell: bash
         env:
           # 未配置证书，显式跳过 macOS 代码签名，避免构建失败
           CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: |
+          set +e
+          npx electron-builder ${{ matrix.args }} --publish never 2>&1 | tee electron-builder.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" -ne 0 ]; then
+            # 把失败原因输出为可见注解，便于在运行页面直接定位（无需授权查看日志）
+            msg=$(grep -v '^$' electron-builder.log | tail -n 8 | tr '\n' '|' | tr -s ' ' | cut -c1-900)
+            echo "::error title=打包失败 (${{ matrix.label }})::$msg"
+            exit $code
+          fi
+
+      - name: 校验产物
+        working-directory: desktop
+        shell: bash
+        run: |
+          ls -lh dist/*.exe dist/*.AppImage dist/*.deb dist/*.dmg dist/*.zip 2>/dev/null || true
+          count=$(ls dist/*.exe dist/*.AppImage dist/*.deb dist/*.dmg dist/*.zip 2>/dev/null | wc -l)
+          echo "本平台产物数量: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "::error title=无产物 (${{ matrix.label }})::未生成任何安装包，请查看打包日志"
+            exit 1
+          fi
 
       - name: 上传构建产物
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          if-no-files-found: error
+          if-no-files-found: warn
           path: |
             desktop/dist/*.exe
             desktop/dist/*.AppImage
@@ -73,18 +106,28 @@ jobs:
   release:
     name: 发布 Release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 即使某个平台构建失败，也把已成功的产物发布出去
+    if: always() && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     steps:
       - name: 汇总各平台产物
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
 
-      - name: 列出待发布文件
-        run: ls -lh release-assets
+      - name: 校验待发布产物
+        shell: bash
+        run: |
+          ls -lh release-assets || true
+          count=$(ls release-assets 2>/dev/null | wc -l)
+          echo "待发布文件数: $count"
+          if [ "$count" -eq 0 ]; then
+            echo "::error title=无可发布产物::所有平台均未产出安装包"
+            exit 1
+          fi
 
       - name: 发布到 GitHub Release
         uses: softprops/action-gh-release@v2

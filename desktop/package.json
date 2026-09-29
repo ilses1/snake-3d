@@ -3,7 +3,12 @@
   "version": "1.0.0",
   "productName": "Snake3D",
   "description": "3D 贪吃蛇桌面版",
-  "author": "WorkBuddy",
+  "author": {
+    "name": "wusandao",
+    "email": "wusandao@163.com"
+  },
+  "homepage": "https://github.com/ilses1/snake-3d",
+  "license": "MIT",
   "main": "main.js",
   "scripts": {
     "sync": "node scripts/sync-web.mjs",
@@ -41,6 +46,7 @@
       "category": "Game",
       "synopsis": "3D 贪吃蛇",
       "description": "用 Three.js 打造的 3D 贪吃蛇游戏",
+      "maintainer": "wusandao <wusandao@163.com>",
       "target": [
         { "target": "AppImage", "arch": ["x64"] },
         { "target": "deb", "arch": ["x64"] }
