@@ -8,7 +8,10 @@
   "scripts": {
     "sync": "node scripts/sync-web.mjs",
     "start": "electron .",
-    "dist": "npm run sync && electron-builder --win portable --x64"
+    "dist": "npm run sync && electron-builder --win --x64",
+    "dist:linux": "npm run sync && electron-builder --linux --x64",
+    "dist:mac": "npm run sync && electron-builder --mac --x64 --arm64",
+    "dist:all": "npm run sync && electron-builder --win --linux --mac --x64"
   },
   "devDependencies": {
     "electron": "^33.2.0",
@@ -32,6 +35,27 @@
     },
     "portable": {
       "artifactName": "Snake3D-Portable.exe"
+    },
+    "linux": {
+      "icon": "icon.png",
+      "category": "Game",
+      "synopsis": "3D 贪吃蛇",
+      "description": "用 Three.js 打造的 3D 贪吃蛇游戏",
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb", "arch": ["x64"] }
+      ],
+      "artifactName": "Snake3D-${version}-${arch}.${ext}"
+    },
+    "mac": {
+      "icon": "icon.png",
+      "category": "public.app-category.games",
+      "identity": null,
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] },
+        { "target": "zip", "arch": ["x64", "arm64"] }
+      ],
+      "artifactName": "Snake3D-${version}-${arch}.${ext}"
     }
   }
 }

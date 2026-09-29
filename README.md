@@ -42,17 +42,34 @@ cd web
 python -m http.server 8080   # 或 npx serve .
 ```
 
-### 桌面版（Windows）
+### 桌面版
+
+到 [Releases](https://github.com/ilses1/snake-3d/releases) 下载对应平台的安装包，无需自行编译：
+
+| 平台 | 文件 | 说明 |
+| --- | --- | --- |
+| Windows | `Snake3D-Portable.exe` | 免安装便携版，双击即玩 |
+| macOS | `Snake3D-*-arm64.dmg` / `Snake3D-*-x64.dmg` | Apple 芯片选 arm64，Intel 选 x64 |
+| Linux | `Snake3D-*.AppImage` / `Snake3D-*.deb` | AppImage 通用；deb 适用于 Debian/Ubuntu |
+
+> 构建产物未做代码签名，首次打开可能被系统拦截：
+> **Windows** 在 SmartScreen 提示中点「更多信息 → 仍要运行」；
+> **macOS** 右键点击 App 选择「打开」，或执行 `xattr -cr /Applications/Snake3D.app`；
+> **Linux** AppImage 需先 `chmod +x Snake3D-*.AppImage`。
+
+#### 从源码构建
 
 ```bash
 cd desktop
-npm install        # 安装 Electron 与打包工具
-npm start          # 开发模式直接运行
-npm run dist       # 打包出 dist/Snake3D-Portable.exe（免安装便携版）
+npm install          # 安装 Electron 与打包工具
+npm start            # 开发模式直接运行
+npm run dist         # Windows：dist/Snake3D-Portable.exe
+npm run dist:linux   # Linux：AppImage + deb
+npm run dist:mac     # macOS：dmg + zip（x64 与 arm64）
 ```
 
 > 桌面版将 three.js 随包分发，运行时**完全离线**；主进程内置仅监听 127.0.0.1 的本地静态服务托管页面。
-> 未签名 exe 首次运行时 Windows SmartScreen 可能提示，选择「仍要运行」即可。
+> 一般不需要本地构建：推送 tag 后 GitHub Actions 会自动完成三平台打包并发布到 Release。
 
 ## 📁 目录结构
 
@@ -65,7 +82,7 @@ npm run dist       # 打包出 dist/Snake3D-Portable.exe（免安装便携版）
 │   ├── scripts/sync-web.mjs
 │   └── package.json
 ├── docs/                # 截图
-└── .github/workflows/   # CI：打 tag 自动打包 exe 并发布 Release
+└── .github/workflows/   # CI：打 tag 自动打包三平台安装包并发布 Release；main 变更自动部署 Pages
 ```
 
 ## 🛠 技术要点
@@ -79,7 +96,7 @@ npm run dist       # 打包出 dist/Snake3D-Portable.exe（免安装便携版）
 
 ```bash
 git tag v1.0.1
-git push origin v1.0.1     # CI 自动打包 exe 并附到 GitHub Release
+git push origin v1.0.1     # CI 并行打包 Windows / macOS / Linux 并附到 GitHub Release
 ```
 
 ## License
